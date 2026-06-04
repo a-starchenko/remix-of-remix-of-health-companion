@@ -34,14 +34,14 @@ CREATE TRIGGER update_rag_files_updated_at
 BEFORE UPDATE ON public.rag_files
 FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
--- rag_chunks table (768-dim to fit pgvector HNSW limits)
+-- rag_chunks table (384-dim for Supabase gte-small)
 CREATE TABLE public.rag_chunks (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null,
   file_id uuid not null references public.rag_files(id) on delete cascade,
   chunk_index integer not null,
   content text not null,
-  embedding vector(768),
+  embedding vector(384),
   created_at timestamptz not null default now()
 );
 
@@ -64,7 +64,7 @@ CREATE INDEX rag_chunks_file_idx ON public.rag_chunks(file_id);
 
 -- Match function (security definer; filters by user_id arg, but caller's RLS still applies on read)
 CREATE OR REPLACE FUNCTION public.match_rag_chunks(
-  query_embedding vector(768),
+  query_embedding vector(384),
   match_user_id uuid,
   match_count int DEFAULT 6
 )

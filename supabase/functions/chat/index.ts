@@ -1,3 +1,4 @@
+// @ts-nocheck — Deno runtime; not checked by Node.js TypeScript server
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
@@ -6,27 +7,22 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY")!;
+const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
+const CHAT_MODEL = Deno.env.get("OPENROUTER_MODEL") ?? "google/gemma-3-27b-it:free";
+const embedModel = new Supabase.ai.Session("gte-small");
+
 async function embed(text: string): Promise<number[] | null> {
-  const r = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "google/gemini-embedding-001",
-      input: text,
-      dimensions: 768,
-    }),
-  });
-  if (!r.ok) {
-    console.error("embed failed", r.status, await r.text());
+  try {
+    const result = await embedModel.run(text, { mean_pool: true, normalize: true });
+    return Array.from(result as number[]);
+  } catch (e) {
+    console.error("embed failed", e);
     return null;
   }
-  const j = await r.json();
-  return j.data?.[0]?.embedding ?? null;
 }
 
 Deno.serve(async (req) => {
@@ -88,11 +84,11 @@ Deno.serve(async (req) => {
         : ""
     }`;
 
-    const r = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
-      headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${OPENROUTER_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
+        model: CHAT_MODEL,
         messages: [{ role: "system", content: systemPrompt }, ...messages],
       }),
     });

@@ -1,4 +1,5 @@
--- Create trigger to auto-create profile on new user signup
+-- Ensure trigger exists (idempotent)
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW
