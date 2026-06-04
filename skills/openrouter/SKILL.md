@@ -70,11 +70,12 @@ Do **not** use `response_format` / structured output — this project uses force
 
 ## Retry / backoff helper
 
-Retries on transient errors (429 rate-limit, 502/503/529 gateway errors) with exponential backoff.
-Respects the `retry-after` response header when present.
+Retries on transient errors (429 rate-limit and any 5xx server/gateway error)
+with exponential backoff. Respects the `retry-after` response header when present.
 
 ```typescript
-const RETRYABLE = new Set([429, 502, 503, 529]);
+// 429 = rate limit; anything >= 500 = transient server/gateway error.
+const isRetryable = (status: number) => status === 429 || status >= 500;
 const BASE_DELAY_MS = 1_000;
 const MAX_RETRIES = 4;
 
@@ -82,7 +83,7 @@ async function fetchWithRetry(url: string, init: RequestInit): Promise<Response>
   let attempt = 0;
   while (true) {
     const res = await fetch(url, init);
-    if (res.ok || !RETRYABLE.has(res.status) || attempt >= MAX_RETRIES) {
+    if (res.ok || !isRetryable(res.status) || attempt >= MAX_RETRIES) {
       return res;
     }
     const retryAfterHeader = res.headers.get("retry-after");
@@ -124,12 +125,21 @@ async function fetchWithRetry(url: string, init: RequestInit): Promise<Response>
 
 ## Model selection guide
 
+Forced tool-calling only works on models that support `tool_choice`. Pick a
+model from OpenRouter's list (https://openrouter.ai/models?supported_parameters=tools)
+and confirm the exact slug there before setting it — an invalid slug makes every
+request fail.
+
 | Model slug | Notes |
 |---|---|
-| `google/gemma-4-31b-it:free` | Default. Free tier, 256K context, native tool_choice support |
-| `mistralai/mistral-7b-instruct:free` | Fallback free option |
-| `openai/gpt-5-mini` | Paid; flagship GPT-5 Mini, reliable tool calling, 1M context |
-| `anthropic/claude-sonnet-4-6` | Paid; latest Sonnet, strong on coding and agents |
+| `google/gemma-4-31b-it:free` | Default. Free tier, supports `tool_choice`. |
+| `openai/gpt-4o-mini` | Paid; cheap, fast, very reliable forced tool-calling. |
+| `anthropic/claude-3.5-sonnet` | Paid; strong reasoning, supports tools. |
+| `google/gemini-2.0-flash-001` | Paid; large context, supports tools. |
+
+> Free-tier slugs (the `:free` variants) are rate-limited and not all of them
+> support `tool_choice` — if forced tool-calling fails, switch to one of the
+> paid rows above without any code change.
 
 Change via `OPENROUTER_MODEL` env var — no code change required.
 
@@ -143,7 +153,7 @@ Edge functions live on Supabase — Vercel knows nothing about them. `git push` 
 ```bash
 npx supabase login
 ```
-Відкриється браузер для підтвердження.
+This opens a browser to confirm the login.
 
 **Deploy a single function:**
 ```bash

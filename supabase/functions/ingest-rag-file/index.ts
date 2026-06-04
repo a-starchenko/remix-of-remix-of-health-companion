@@ -12,6 +12,16 @@ const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 
 const embedModel = new Supabase.ai.Session("gte-small");
 
+// Server-side guardrails — mirror the client checks so a direct API call can't
+// bypass them (spec §3.1: ".pdf .docx .txt .md .csv .json, ≤ 20 MB each").
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
+const ALLOWED_EXTENSIONS = new Set(["pdf", "docx", "txt", "md", "csv", "json"]);
+
+function fileExtension(name: string): string {
+  const dot = name.lastIndexOf(".");
+  return dot === -1 ? "" : name.slice(dot + 1).toLowerCase();
+}
+
 function chunkText(text: string, size = 1200, overlap = 150): string[] {
   const clean = text.replace(/\s+/g, " ").trim();
   if (!clean) return [];
@@ -65,11 +75,22 @@ Deno.serve(async (req) => {
     // so a user can only ever ingest into their own rows.
     const { data: file, error: fileErr } = await supabase
       .from("rag_files")
-      .select("id, user_id")
+      .select("id, user_id, file_name, size_bytes")
       .eq("id", file_id)
       .single();
     if (fileErr || !file || file.user_id !== user.id) {
       return new Response(JSON.stringify({ error: "File not found" }), { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    // Enforce size and type server-side (client checks are not authoritative).
+    const ext = fileExtension(file.file_name ?? "");
+    if (!ALLOWED_EXTENSIONS.has(ext)) {
+      await supabase.from("rag_files").update({ status: "error", error_message: `Unsupported file type: .${ext || "?"}` }).eq("id", file_id);
+      return new Response(JSON.stringify({ error: "Unsupported file type" }), { status: 415, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+    if (typeof file.size_bytes === "number" && file.size_bytes > MAX_FILE_BYTES) {
+      await supabase.from("rag_files").update({ status: "error", error_message: "File exceeds 20MB limit" }).eq("id", file_id);
+      return new Response(JSON.stringify({ error: "File too large (max 20MB)" }), { status: 413, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     const chunks = chunkText(text);

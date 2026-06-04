@@ -33,8 +33,6 @@ All tables live in the `public` schema. Migrations are the single source of trut
 | Table | Purpose |
 |---|---|
 | `profiles` | One row per user; auto-created by `handle_new_user` trigger |
-| `user_settings` | Per-user AI preferences |
-| `user_roles` | RBAC roles (`admin`, `moderator`, `user`) |
 | `conversations` | Chat sessions (`id`, `user_id`, `title`, `created_at`, `updated_at`) |
 | `messages` | Individual chat turns (`id`, `conversation_id`, `user_id`, `role`, `content`, `created_at`) |
 | `rag_files` | Uploaded document metadata (equivalent to `kb_documents`) |

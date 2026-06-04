@@ -11,7 +11,7 @@ const KnowledgeBasePage: React.FC = () => {
   const { user, loading } = useAuth();
 
   useEffect(() => {
-    if (!loading && !user) navigate('/auth');
+    if (!loading && !user) navigate('/sign-in');
   }, [user, loading, navigate]);
 
   const handleBack = () => navigate(-1);

@@ -27,7 +27,7 @@ const SettingsPage: React.FC = () => {
 
   useEffect(() => {
     if (!authLoading && !user) {
-      navigate('/auth');
+      navigate('/sign-in');
     }
   }, [user, authLoading, navigate]);
 

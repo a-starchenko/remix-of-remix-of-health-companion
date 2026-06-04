@@ -52,7 +52,7 @@ Create a `.env.local` file (never commit it). All required variables:
 | `VITE_SUPABASE_PUBLISHABLE_KEY` | Supabase anon/public key |
 | `VITE_SUPABASE_PROJECT_ID` | Supabase project ID |
 | `OPENROUTER_API_KEY` | OpenRouter API key — **server-side only, never exposed to browser** |
-| `OPENROUTER_MODEL` | Model slug (default: `google/gemma-4-31b-it:free`) |
+| `OPENROUTER_MODEL` | Model slug (default: `google/gemma-4-31b-it:free`; must support tool-calling) |
 
 > `VITE_` prefix makes a variable available client-side. Variables **without** `VITE_` are server-side only.
 

@@ -239,7 +239,7 @@ const ChatView: React.FC = () => {
       </div>
     );
   }
-  if (!user) return <Navigate to="/auth" replace />;
+  if (!user) return <Navigate to="/sign-in" replace />;
 
   const sidebarSessions = conversations.map((c) => ({
     id: c.id,
