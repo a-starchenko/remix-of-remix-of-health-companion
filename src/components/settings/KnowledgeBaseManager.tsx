@@ -54,6 +54,14 @@ export const KnowledgeBaseManager: React.FC = () => {
     loadFiles();
   }, [loadFiles]);
 
+  // Poll every 5 s while any file is still being processed
+  useEffect(() => {
+    const hasPending = files.some((f) => f.status === 'pending');
+    if (!hasPending) return;
+    const timer = setInterval(loadFiles, 5000);
+    return () => clearInterval(timer);
+  }, [files, loadFiles]);
+
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = e.target.files;
     if (!fileList || !user) return;

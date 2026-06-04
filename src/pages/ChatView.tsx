@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { UserDropdown } from '@/components/layout/UserDropdown';
@@ -18,28 +18,19 @@ interface Message {
   content: string;
 }
 
-interface ChatSession {
+interface Conversation {
   id: string;
   title: string;
-  date: string;
-  preview: string;
-  messages: Message[];
+  created_at: string;
+  updated_at: string;
 }
 
-const initialMessage: Message = {
-  id: '1',
+const WELCOME_MESSAGE: Message = {
+  id: 'welcome',
   role: 'assistant',
   content:
     "Hi! Ask me anything. I'll answer in formatted markdown (with tables when useful). If you've uploaded files to your knowledge base in **Account → Profile**, I'll use them to ground my answers.",
 };
-
-const makeSession = (): ChatSession => ({
-  id: `session-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-  title: 'New chat',
-  date: new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
-  preview: 'No messages yet',
-  messages: [initialMessage],
-});
 
 const ChatView: React.FC = () => {
   const navigate = useNavigate();
@@ -52,49 +43,146 @@ const ChatView: React.FC = () => {
   const [historyOpen, setHistoryOpen] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
 
-  const initialSession = makeSession();
-  const [sessions, setSessions] = useState<ChatSession[]>([initialSession]);
-  const [activeSessionId, setActiveSessionId] = useState<string>(initialSession.id);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Message[]>([WELCOME_MESSAGE]);
+  const [conversationsLoading, setConversationsLoading] = useState(true);
+  const [messagesLoading, setMessagesLoading] = useState(false);
 
-  const activeSession = sessions.find((s) => s.id === activeSessionId) ?? sessions[0];
-  const messages = activeSession?.messages ?? [initialMessage];
+  const hasAutoSelected = useRef(false);
+  const sentInitialPrompt = useRef(false);
+
+  const loadConversations = useCallback(async () => {
+    if (!user) return;
+    const { data, error } = await supabase
+      .from('conversations')
+      .select('*')
+      .order('updated_at', { ascending: false });
+    if (error) {
+      toast.error('Failed to load conversations');
+    } else {
+      setConversations((data ?? []) as Conversation[]);
+    }
+    setConversationsLoading(false);
+  }, [user]);
+
+  const loadMessages = useCallback(async (conversationId: string) => {
+    setMessagesLoading(true);
+    const { data, error } = await supabase
+      .from('messages')
+      .select('*')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: true });
+    if (error) {
+      toast.error('Failed to load messages');
+      setMessagesLoading(false);
+      return;
+    }
+    const msgs: Message[] = (data ?? []).map((m) => ({
+      id: m.id,
+      role: m.role as 'user' | 'assistant',
+      content: m.content,
+    }));
+    setMessages(msgs.length > 0 ? msgs : [WELCOME_MESSAGE]);
+    setMessagesLoading(false);
+  }, []);
 
   useEffect(() => {
-    const initialPrompt = location.state?.initialPrompt;
-    if (initialPrompt) {
+    if (user) loadConversations();
+  }, [user, loadConversations]);
+
+  // Auto-select first conversation once on initial load
+  useEffect(() => {
+    if (conversationsLoading || hasAutoSelected.current) return;
+    hasAutoSelected.current = true;
+    if (conversations.length > 0) {
+      const first = conversations[0];
+      setActiveConversationId(first.id);
+      loadMessages(first.id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationsLoading]);
+
+  // Send initialPrompt from navigation state (after conversations load)
+  useEffect(() => {
+    const initialPrompt = location.state?.initialPrompt as string | undefined;
+    if (initialPrompt && !conversationsLoading && !sentInitialPrompt.current) {
+      sentInitialPrompt.current = true;
       handleSendMessage(initialPrompt);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [conversationsLoading]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isLoading]);
 
-  const updateActiveSession = (updater: (s: ChatSession) => ChatSession) => {
-    setSessions((prev) => prev.map((s) => (s.id === activeSessionId ? updater(s) : s)));
+  const handleSelectSession = async (id: string) => {
+    if (id === activeConversationId) return;
+    setActiveConversationId(id);
+    await loadMessages(id);
+  };
+
+  const handleNewChat = () => {
+    setActiveConversationId(null);
+    setMessages([WELCOME_MESSAGE]);
   };
 
   const handleSendMessage = async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || isLoading) return;
 
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      role: 'user',
-      content: trimmed,
-    };
-    const nextMessages = [...messages, userMessage];
-    updateActiveSession((s) => ({
-      ...s,
-      messages: nextMessages,
-      title: s.title === 'New chat' ? trimmed.slice(0, 40) : s.title,
-      preview: trimmed.slice(0, 60),
-    }));
+    const tempId = `tmp-${Date.now()}`;
+    const userMessage: Message = { id: tempId, role: 'user', content: trimmed };
+
+    // Strip welcome message from history sent to AI / persisted
+    const history = messages.filter((m) => m.id !== 'welcome');
+    const nextMessages = [...history, userMessage];
+
+    setMessages(nextMessages);
     setInputValue('');
     setIsLoading(true);
 
     try {
+      // Create conversation on first message in a new chat
+      let convId = activeConversationId;
+      if (!convId) {
+        const title = trimmed.slice(0, 60);
+        const { data: conv, error: convErr } = await supabase
+          .from('conversations')
+          .insert({ user_id: user!.id, title })
+          .select()
+          .single();
+        if (convErr) throw convErr;
+        convId = conv.id;
+        setActiveConversationId(convId);
+        setConversations((prev) => [conv as Conversation, ...prev]);
+      }
+
+      // Save user message
+      const { data: savedUser, error: umErr } = await supabase
+        .from('messages')
+        .insert({ conversation_id: convId, user_id: user!.id, role: 'user', content: trimmed })
+        .select()
+        .single();
+      if (umErr) throw umErr;
+
+      // Replace temp id with real id
+      setMessages((prev) => prev.map((m) => (m.id === tempId ? { ...m, id: savedUser.id } : m)));
+
+      // Update conversation title if this is the very first user message
+      if (history.length === 0) {
+        const newTitle = trimmed.slice(0, 60);
+        await supabase
+          .from('conversations')
+          .update({ title: newTitle, updated_at: new Date().toISOString() })
+          .eq('id', convId);
+        setConversations((prev) =>
+          prev.map((c) => (c.id === convId ? { ...c, title: newTitle } : c))
+        );
+      }
+
+      // Call the AI
       const { data, error } = await supabase.functions.invoke('chat', {
         body: {
           messages: nextMessages.map((m) => ({ role: m.role, content: m.content })),
@@ -106,29 +194,35 @@ const ChatView: React.FC = () => {
         return;
       }
       const reply: string = data?.reply ?? '';
-      updateActiveSession((s) => ({
-        ...s,
-        messages: [
-          ...s.messages,
-          { id: (Date.now() + 1).toString(), role: 'assistant', content: reply },
-        ],
-      }));
+
+      // Save assistant reply
+      const { data: savedAssistant, error: amErr } = await supabase
+        .from('messages')
+        .insert({ conversation_id: convId, user_id: user!.id, role: 'assistant', content: reply })
+        .select()
+        .single();
+      if (amErr) throw amErr;
+
+      setMessages((prev) => [
+        ...prev,
+        { id: savedAssistant.id, role: 'assistant', content: reply },
+      ]);
+
+      // Bump conversation to top
+      const now = new Date().toISOString();
+      await supabase.from('conversations').update({ updated_at: now }).eq('id', convId);
+      setConversations((prev) => {
+        const updated = prev.map((c) => (c.id === convId ? { ...c, updated_at: now } : c));
+        return [...updated].sort(
+          (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+        );
+      });
     } catch (err: any) {
       console.error(err);
       toast.error(err?.message || 'Failed to get a response');
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const handleNewChat = () => {
-    const s = makeSession();
-    setSessions((prev) => [s, ...prev]);
-    setActiveSessionId(s.id);
-  };
-
-  const handleSelectSession = (id: string) => {
-    setActiveSessionId(id);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -147,12 +241,12 @@ const ChatView: React.FC = () => {
   }
   if (!user) return <Navigate to="/auth" replace />;
 
-  const sidebarSessions = sessions.map((s) => ({
-    id: s.id,
-    title: s.title,
-    date: s.date,
-    preview: s.preview,
-    isActive: s.id === activeSessionId,
+  const sidebarSessions = conversations.map((c) => ({
+    id: c.id,
+    title: c.title,
+    date: new Date(c.updated_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+    preview: '',
+    isActive: c.id === activeConversationId,
   }));
 
   return (
@@ -165,6 +259,7 @@ const ChatView: React.FC = () => {
           isOpen={historyOpen}
           onToggle={() => setHistoryOpen(!historyOpen)}
           sessions={sidebarSessions}
+          loading={conversationsLoading}
           onSelectSession={handleSelectSession}
           onNewChat={handleNewChat}
           footer={<UserDropdown variant="sidebar" />}
@@ -187,15 +282,21 @@ const ChatView: React.FC = () => {
         </div>
 
         <div className="flex-1 min-h-0 overflow-y-auto px-4 py-6 space-y-4">
-          {messages.map((message) => (
-            <ChatBubble key={message.id} role={message.role}>
-              {message.role === 'assistant' ? (
-                <MarkdownMessage content={message.content} />
-              ) : (
-                <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
-              )}
-            </ChatBubble>
-          ))}
+          {messagesLoading ? (
+            <div className="flex items-center justify-center h-32">
+              <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            messages.map((message) => (
+              <ChatBubble key={message.id} role={message.role}>
+                {message.role === 'assistant' ? (
+                  <MarkdownMessage content={message.content} />
+                ) : (
+                  <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
+                )}
+              </ChatBubble>
+            ))
+          )}
           {isLoading && (
             <ChatBubble role="assistant">
               <div className="flex items-center gap-2 text-muted-foreground text-sm">

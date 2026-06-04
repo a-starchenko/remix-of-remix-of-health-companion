@@ -1,7 +1,7 @@
 import React from 'react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
-import { MessageSquare, Plus, Clock, ChevronRight, PanelLeftClose, PanelLeft } from 'lucide-react';
+import { MessageSquare, Plus, Clock, ChevronRight, PanelLeftClose, PanelLeft, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface ChatSession {
@@ -16,17 +16,17 @@ interface ChatHistorySidebarProps {
   isOpen: boolean;
   onToggle: () => void;
   sessions?: ChatSession[];
+  loading?: boolean;
   onSelectSession?: (sessionId: string) => void;
   onNewChat?: () => void;
   footer?: React.ReactNode;
 }
 
-const mockSessions: ChatSession[] = [];
-
 export const ChatHistorySidebar: React.FC<ChatHistorySidebarProps> = ({
   isOpen,
   onToggle,
-  sessions = mockSessions,
+  sessions = [],
+  loading = false,
   onSelectSession,
   onNewChat,
   footer,
@@ -48,12 +48,13 @@ export const ChatHistorySidebar: React.FC<ChatHistorySidebarProps> = ({
         <div className="flex items-center gap-1">
           <Button
             variant="ghost"
-            size="icon"
+            size="sm"
             onClick={onNewChat}
-            className="h-8 w-8"
+            className="h-8 gap-1.5 px-2 text-xs"
             title="New chat"
           >
-            <Plus className="w-4 h-4" />
+            <Plus className="w-3.5 h-3.5" />
+            New chat
           </Button>
           <Button
             variant="ghost"
@@ -70,48 +71,59 @@ export const ChatHistorySidebar: React.FC<ChatHistorySidebarProps> = ({
       {/* Sessions List */}
       <ScrollArea className={cn("flex-1", !isOpen && "hidden")}>
         <div className="p-3 space-y-1">
-          {sessions.map((session) => (
-            <button
-              key={session.id}
-              onClick={() => onSelectSession?.(session.id)}
-              className={cn(
-                "w-full text-left p-3 rounded-xl transition-all duration-150 group",
-                session.isActive
-                  ? "bg-primary/10 border border-primary/20"
-                  : "hover:bg-accent border border-transparent"
-              )}
-            >
-              <div className="flex items-start gap-3">
-                <div className={cn(
-                  "w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0",
-                  session.isActive ? "bg-primary/20" : "bg-muted"
-                )}>
-                  <MessageSquare className={cn(
-                    "w-4 h-4",
-                    session.isActive ? "text-primary" : "text-muted-foreground"
-                  )} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className={cn(
-                      "text-sm font-medium truncate",
-                      session.isActive ? "text-foreground" : "text-foreground"
-                    )}>
-                      {session.title}
-                    </p>
-                    <ChevronRight className={cn(
-                      "w-4 h-4 flex-shrink-0 transition-opacity",
-                      session.isActive 
-                        ? "text-primary opacity-100" 
-                        : "text-muted-foreground opacity-0 group-hover:opacity-100"
+          {loading ? (
+            <div className="flex items-center justify-center py-10">
+              <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+            </div>
+          ) : sessions.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-10 gap-2 text-center">
+              <MessageSquare className="w-8 h-8 text-muted-foreground/40" />
+              <p className="text-xs text-muted-foreground">No conversations yet.</p>
+              <p className="text-xs text-muted-foreground">Start chatting to see history here.</p>
+            </div>
+          ) : (
+            sessions.map((session) => (
+              <button
+                key={session.id}
+                onClick={() => onSelectSession?.(session.id)}
+                className={cn(
+                  "w-full text-left p-3 rounded-xl transition-all duration-150 group",
+                  session.isActive
+                    ? "bg-primary/10 border border-primary/20"
+                    : "hover:bg-accent border border-transparent"
+                )}
+              >
+                <div className="flex items-start gap-3">
+                  <div className={cn(
+                    "w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0",
+                    session.isActive ? "bg-primary/20" : "bg-muted"
+                  )}>
+                    <MessageSquare className={cn(
+                      "w-4 h-4",
+                      session.isActive ? "text-primary" : "text-muted-foreground"
                     )} />
                   </div>
-                  <p className="text-xs text-muted-foreground mt-0.5">{session.date}</p>
-                  <p className="text-xs text-muted-foreground truncate mt-1">{session.preview}</p>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-medium truncate text-foreground">
+                        {session.title}
+                      </p>
+                      <ChevronRight className={cn(
+                        "w-4 h-4 flex-shrink-0 transition-opacity",
+                        session.isActive
+                          ? "text-primary opacity-100"
+                          : "text-muted-foreground opacity-0 group-hover:opacity-100"
+                      )} />
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5">{session.date}</p>
+                    {session.preview && (
+                      <p className="text-xs text-muted-foreground truncate mt-1">{session.preview}</p>
+                    )}
+                  </div>
                 </div>
-              </div>
-            </button>
-          ))}
+              </button>
+            ))
+          )}
         </div>
       </ScrollArea>
 
