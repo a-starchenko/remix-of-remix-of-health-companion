@@ -1,3 +1,8 @@
+---
+name: OpenRouter Forced Tool-Calling
+description: Call any LLM through OpenRouter with forced tool-calling for typed output, retry/backoff on 429/5xx, a single swappable model config, and RAG context injection.
+---
+
 # Skill: OpenRouter — forced tool-calling, retry/backoff, model swapping
 
 Shared reference for every edge function that calls OpenRouter in this project.
@@ -195,24 +200,28 @@ The `match_rag_chunks` SQL function (defined in `supabase/migrations/`) is calle
 SELECT c.id, c.file_id, c.content,
        1 - (c.embedding <=> query_embedding) AS similarity
 FROM public.rag_chunks c
-WHERE c.user_id = match_user_id AND c.embedding IS NOT NULL
+WHERE c.user_id = auth.uid() AND c.embedding IS NOT NULL
 ORDER BY c.embedding <=> query_embedding
 LIMIT match_count;
 ```
 
-Security: the function is `SECURITY DEFINER` but scoped to `match_user_id` — RLS still applies and users can never see each other's chunks.
+Security: the function is `SECURITY INVOKER` and derives the owner from `auth.uid()` (not a caller-supplied argument), so the caller's RLS on `rag_chunks` applies and users can never see each other's chunks. This is why the edge function can call it with the **anon client + the user's JWT** — no service-role key needed.
 
 ### Retrieving context in the edge function
 
 ```typescript
-async function retrieveContext(userId: string, question: string): Promise<string> {
+// `client` is the RLS-enforced anon client built from the caller's JWT —
+// retrieval is scoped to auth.uid() by the SECURITY INVOKER RPC, so no
+// service-role key is involved.
+async function retrieveContext(
+  client: SupabaseClient,
+  question: string
+): Promise<string> {
   if (!question) return "";
   const qvec = await embed(question.slice(0, 4000)); // truncate to stay within model input limit
   if (!qvec) return "";
-  const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-  const { data: matches, error } = await admin.rpc("match_rag_chunks", {
+  const { data: matches, error } = await client.rpc("match_rag_chunks", {
     query_embedding: qvec as any,
-    match_user_id: userId,
     match_count: 6,
   });
   if (error || !matches?.length) return "";
@@ -227,7 +236,7 @@ Returns `""` when the user has no documents — the system prompt simply omits t
 ### Context injection into the system prompt
 
 ```typescript
-const context = await retrieveContext(user.id, effectiveQuestion);
+const context = await retrieveContext(supabase, effectiveQuestion);
 
 const systemPrompt = [
   "You are a helpful AI health assistant.",

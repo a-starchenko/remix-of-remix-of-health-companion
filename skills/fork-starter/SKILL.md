@@ -1,3 +1,8 @@
+---
+name: Fork Starter
+description: Remix a Lovable starter project into your own account and connect it to a fresh GitHub repository so push-to-deploy works.
+---
+
 # Skill: Fork Starter
 
 Steps to remix a Lovable project and connect it to a fresh GitHub repository.

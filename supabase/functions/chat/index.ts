@@ -10,7 +10,6 @@ const corsHeaders = {
 const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const CHAT_MODEL = Deno.env.get("OPENROUTER_MODEL") ?? "google/gemma-4-31b-it:free";
 
 // ---------------------------------------------------------------------------
@@ -37,7 +36,8 @@ const chatTool = {
 // ---------------------------------------------------------------------------
 // Retry / backoff helper
 // ---------------------------------------------------------------------------
-const RETRYABLE = new Set([429, 502, 503, 529]);
+// Retry on rate-limit (429) and any server-side 5xx error
+const isRetryable = (status: number) => status === 429 || status >= 500;
 const BASE_DELAY_MS = 1_000;
 const MAX_RETRIES = 4;
 
@@ -45,7 +45,7 @@ async function fetchWithRetry(url: string, init: RequestInit): Promise<Response>
   let attempt = 0;
   while (true) {
     const res = await fetch(url, init);
-    if (res.ok || !RETRYABLE.has(res.status) || attempt >= MAX_RETRIES) {
+    if (res.ok || !isRetryable(res.status) || attempt >= MAX_RETRIES) {
       return res;
     }
     const retryAfterHeader = res.headers.get("retry-after");
@@ -74,14 +74,17 @@ async function embed(text: string): Promise<number[] | null> {
   }
 }
 
-async function retrieveContext(userId: string, question: string): Promise<string> {
+// Uses the RLS-enforced anon client (caller's JWT) so retrieval is scoped to
+// the authenticated user via the SECURITY INVOKER RPC, not a service-role key.
+async function retrieveContext(
+  client: ReturnType<typeof createClient>,
+  question: string
+): Promise<string> {
   if (!question) return "";
   const qvec = await embed(question.slice(0, 4000));
   if (!qvec) return "";
-  const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-  const { data: matches, error } = await admin.rpc("match_rag_chunks", {
+  const { data: matches, error } = await client.rpc("match_rag_chunks", {
     query_embedding: qvec as any,
-    match_user_id: userId,
     match_count: 6,
   });
   if (error) {
@@ -132,10 +135,13 @@ Deno.serve(async (req) => {
       question ??
       ([...messages].reverse().find((m) => m.role === "user")?.content ?? "");
 
-    const context = await retrieveContext(user.id, effectiveQuestion);
+    const context = await retrieveContext(supabase, effectiveQuestion);
 
     const systemPrompt = [
-      "You are a helpful AI health assistant.",
+      "You are a focused AI health assistant. Your ONLY domain is health, medicine, wellness, fitness, nutrition, mental health, medical conditions, symptoms, treatments, medications, and closely related topics — plus questions about the user's own uploaded health documents.",
+      "Scope rule: If a question is NOT about health (e.g. how to build a house, coding help, legal/financial advice, general trivia, math, cooking unrelated to nutrition, etc.), do NOT answer it. Politely decline in one short sentence and steer the user back to health topics. Do this even if you know the answer.",
+      "When declining, still call the `answer` tool — put the brief refusal in the `reply` field. Example: \"I'm a health assistant, so I can only help with health and medical questions. Is there something about your health I can help with?\"",
+      "Never provide a definitive diagnosis; encourage consulting a licensed professional for serious or urgent concerns.",
       "Always call the `answer` tool with a well-formatted Markdown reply.",
       "Use tables (GitHub-flavored markdown) when the data is tabular.",
       "Use headings, lists, bold, and code blocks where appropriate.",
@@ -181,22 +187,24 @@ Deno.serve(async (req) => {
 
     const data = await openrouterRes.json();
 
-    // Extract reply from forced tool call
-    let reply = "";
+    // Read the typed answer strictly from the forced tool call — never free text
     const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
-    if (toolCall?.function?.arguments) {
-      try {
-        const args = JSON.parse(toolCall.function.arguments);
-        reply = args.reply ?? "";
-      } catch {
-        console.error("Failed to parse tool arguments", toolCall.function.arguments);
-      }
+    if (!toolCall?.function?.arguments) {
+      console.error("tool_choice not honoured — no tool call returned", data.choices?.[0]?.message);
+      return json({ error: "AI response was malformed. Please try again." }, 502);
     }
 
-    // Fallback to free-text content if the model ignored tool_choice
+    let reply = "";
+    try {
+      const args = JSON.parse(toolCall.function.arguments);
+      reply = typeof args.reply === "string" ? args.reply : "";
+    } catch {
+      console.error("Failed to parse tool arguments", toolCall.function.arguments);
+      return json({ error: "AI response was malformed. Please try again." }, 502);
+    }
+
     if (!reply) {
-      reply = data.choices?.[0]?.message?.content ?? "";
-      console.warn("tool_choice not honoured — fell back to free-text content");
+      return json({ error: "AI returned an empty answer. Please try again." }, 502);
     }
 
     return json({ reply, usedContext: !!context });

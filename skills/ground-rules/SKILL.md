@@ -1,3 +1,8 @@
+---
+name: Ground Rules
+description: Project-wide conventions (TypeScript-only, secret management, OpenRouter-only LLM routing) that every contributor and AI agent must follow.
+---
+
 # Skill: Ground Rules
 
 Project-wide conventions every contributor and AI agent must follow.
@@ -11,7 +16,7 @@ Project-wide conventions every contributor and AI agent must follow.
 ## Secret management
 
 - Variables prefixed `VITE_` are bundled into the client — **only put public keys there** (Supabase anon key, project URL).
-- `OPENROUTER_API_KEY` and `SUPABASE_SERVICE_ROLE_KEY` are **server-side only**. They must never appear in any `VITE_` variable or be imported in a file that runs in the browser.
+- `OPENROUTER_API_KEY` is **server-side only**. It must never appear in any `VITE_` variable or be imported in a file that runs in the browser. (A `SUPABASE_SERVICE_ROLE_KEY` would be server-side only too — but this project doesn't use one; Edge Functions act under the caller's JWT.)
 - Never commit `.env` or `.env.local`. Use `.env.example` with empty values as the template.
 
 ## LLM routing

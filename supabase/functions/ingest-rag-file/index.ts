@@ -9,7 +9,6 @@ const corsHeaders = {
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 const embedModel = new Supabase.ai.Session("gte-small");
 
@@ -62,9 +61,9 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: "file_id and text required" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-
-    const { data: file, error: fileErr } = await admin
+    // All DB work runs through the RLS-enforced anon client (caller's JWT),
+    // so a user can only ever ingest into their own rows.
+    const { data: file, error: fileErr } = await supabase
       .from("rag_files")
       .select("id, user_id")
       .eq("id", file_id)
@@ -75,7 +74,7 @@ Deno.serve(async (req) => {
 
     const chunks = chunkText(text);
     if (chunks.length === 0) {
-      await admin.from("rag_files").update({ status: "error", error_message: "No text extracted" }).eq("id", file_id);
+      await supabase.from("rag_files").update({ status: "error", error_message: "No text extracted" }).eq("id", file_id);
       return new Response(JSON.stringify({ error: "No text extracted from file" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
@@ -94,19 +93,19 @@ Deno.serve(async (req) => {
       .filter((r) => r.embedding);
 
     if (rows.length === 0) {
-      await admin.from("rag_files").update({ status: "error", error_message: "Embedding failed" }).eq("id", file_id);
+      await supabase.from("rag_files").update({ status: "error", error_message: "Embedding failed" }).eq("id", file_id);
       return new Response(JSON.stringify({ error: "Embedding failed" }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    await admin.from("rag_chunks").delete().eq("file_id", file_id);
-    const { error: insErr } = await admin.from("rag_chunks").insert(rows);
+    await supabase.from("rag_chunks").delete().eq("file_id", file_id);
+    const { error: insErr } = await supabase.from("rag_chunks").insert(rows);
     if (insErr) {
       console.error("insert err", insErr);
-      await admin.from("rag_files").update({ status: "error", error_message: insErr.message }).eq("id", file_id);
+      await supabase.from("rag_files").update({ status: "error", error_message: insErr.message }).eq("id", file_id);
       return new Response(JSON.stringify({ error: insErr.message }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    await admin.from("rag_files").update({ status: "ready", chunk_count: rows.length, error_message: null }).eq("id", file_id);
+    await supabase.from("rag_files").update({ status: "ready", chunk_count: rows.length, error_message: null }).eq("id", file_id);
 
     return new Response(JSON.stringify({ ok: true, chunks: rows.length }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },

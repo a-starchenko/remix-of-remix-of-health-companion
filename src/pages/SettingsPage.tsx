@@ -9,7 +9,6 @@ import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { Loader2, User, Mail, KeyRound } from 'lucide-react';
-import { KnowledgeBaseManager } from '@/components/settings/KnowledgeBaseManager';
 
 const SettingsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -193,9 +192,6 @@ const SettingsPage: React.FC = () => {
             </div>
           </CardContent>
         </Card>
-
-        {/* Knowledge base */}
-        <KnowledgeBaseManager />
 
         <div className="pt-4">
           <Button variant="outline" onClick={handleBack} className="w-full">

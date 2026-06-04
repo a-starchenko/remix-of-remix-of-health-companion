@@ -29,7 +29,7 @@ const WELCOME_MESSAGE: Message = {
   id: 'welcome',
   role: 'assistant',
   content:
-    "Hi! Ask me anything. I'll answer in formatted markdown (with tables when useful). If you've uploaded files to your knowledge base in **Account → Profile**, I'll use them to ground my answers.",
+    "Hi! Ask me anything. I'll answer in formatted markdown (with tables when useful). If you've uploaded files to your **Knowledge Base** (from the account menu), I'll use them to ground my answers.",
 };
 
 const ChatView: React.FC = () => {

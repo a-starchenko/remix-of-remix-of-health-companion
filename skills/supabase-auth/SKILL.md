@@ -1,3 +1,8 @@
+---
+name: Supabase Auth (SPA)
+description: Email/password auth for a Vite + React SPA using @supabase/supabase-js — client-side session management and a ProtectedRoute guard instead of Next.js middleware.
+---
+
 # Skill: Supabase Auth — SPA pattern with `@supabase/supabase-js`
 
 > This skill documents the authentication architecture used in this project (Vite + React + React Router SPA). Because there is no SSR or server middleware, we rely on client-side session management via Supabase JS and a `ProtectedRoute` React component instead of Next.js `middleware.ts` or `@supabase/ssr`.
@@ -28,7 +33,6 @@
 | `/chat` | `ChatView` | Protected |
 | `/settings` | `SettingsPage` | Protected |
 | `/knowledge-base` | `KnowledgeBasePage` | Protected |
-| `/admin` | `AdminView` | Protected |
 
 ---
 
@@ -53,7 +57,7 @@ export const supabase = createClient<Database>(
 );
 ```
 
-Only the **anon/publishable key** is used client-side. The **service-role key** lives only in Edge Function environment variables (`SUPABASE_SERVICE_ROLE_KEY`) and is never exposed to the browser.
+Only the **anon/publishable key** is used — both client-side and inside the Edge Functions (which forward the caller's JWT so RLS applies). This project does not use a service-role key at all. If you ever add a deliberate RLS-bypassing job, the **service-role key** must live only in Edge Function environment variables and never reach the browser.
 
 ---
 
@@ -145,7 +149,6 @@ const from = (location.state as { from?: Location })?.from?.pathname ?? '/chat';
 ```ts
 // UserDropdown.tsx
 const handleSignOut = async () => {
-  sessionStorage.removeItem('impersonating');
   await signOut();           // supabase.auth.signOut()
   navigate('/sign-in');
 };
@@ -176,8 +179,9 @@ Never use the service-role key to authenticate users — only to bypass RLS for 
 |----------|-------|---------|
 | `VITE_SUPABASE_URL` | Client | Supabase project base URL (must be `https://<ref>.supabase.co`, not `/rest/v1/`) |
 | `VITE_SUPABASE_PUBLISHABLE_KEY` | Client | Anon/public JWT — safe to expose |
-| `SUPABASE_SERVICE_ROLE_KEY` | Edge Functions only | Bypasses RLS — never expose client-side |
-| `SUPABASE_URL` / `SUPABASE_ANON_KEY` | Edge Functions | Injected automatically by Supabase runtime |
+| `SUPABASE_URL` / `SUPABASE_ANON_KEY` | Edge Functions | Injected automatically by Supabase runtime; functions act under the caller's JWT |
+
+> Not used here: `SUPABASE_SERVICE_ROLE_KEY`. Add it only for a deliberate RLS-bypassing server job — it bypasses RLS, so never expose it client-side.
 
 ---
 

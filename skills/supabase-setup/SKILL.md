@@ -1,3 +1,8 @@
+---
+name: Supabase Setup
+description: Stand up the Supabase data layer — schema migrations, pgvector RAG tables, RLS policies, storage bucket, and env vars — and how to extend it.
+---
+
 # Skill: Supabase Setup
 
 How this project's Supabase data layer is organised, and how to extend it.
@@ -13,10 +18,11 @@ How this project's Supabase data layer is organised, and how to extend it.
 VITE_SUPABASE_URL=https://<project-id>.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=<anon-key>
 VITE_SUPABASE_PROJECT_ID=<project-id>
-SUPABASE_SERVICE_ROLE_KEY=<service-role-key>   # server-side only
 ```
 
-The `VITE_` prefix makes a variable available in the browser bundle. The service-role key **must never** be prefixed with `VITE_`.
+The `VITE_` prefix makes a variable available in the browser bundle.
+
+> This setup does **not** need a service-role key. All Edge Functions act under the caller's JWT (anon client + RLS), so a user can only ever touch their own rows. Only reach for `SUPABASE_SERVICE_ROLE_KEY` (auto-injected into Edge Functions by the Supabase runtime) when you have a deliberate server-side job that must bypass RLS — and never prefix it with `VITE_`.
 
 ---
 
@@ -103,16 +109,18 @@ const embedding = await model.run(text, { mean_pool: true, normalize: true });
 Chat completions use **OpenRouter** (`OPENROUTER_API_KEY`). Embeddings use Supabase AI. The HNSW index (`vector_cosine_ops`) on `rag_chunks.embedding` enables fast cosine similarity search.
 
 At upload time, call the `ingest-rag-file` Edge Function which splits the document, generates embeddings, and inserts rows.  
-At query time, call `match_rag_chunks(query_embedding, match_user_id, match_count)` — a `SECURITY DEFINER` function that runs cosine similarity search:
+At query time, call `match_rag_chunks(query_embedding, match_count)` — a `SECURITY INVOKER` function that derives the owner from `auth.uid()` (not a caller-supplied argument) and runs cosine similarity search under the caller's RLS:
 
 ```sql
 SELECT c.id, c.file_id, c.content,
        1 - (c.embedding <=> query_embedding) AS similarity
 FROM public.rag_chunks c
-WHERE c.user_id = match_user_id AND c.embedding IS NOT NULL
+WHERE c.user_id = auth.uid() AND c.embedding IS NOT NULL
 ORDER BY c.embedding <=> query_embedding
 LIMIT match_count;
 ```
+
+Because the owner comes from `auth.uid()`, the Edge Function calls this RPC with the **anon client + the user's JWT** — no service-role key is needed for retrieval.
 
 The HNSW index on `rag_chunks.embedding` supports up to 2000 dimensions. `gte-small` at 384 dims fits comfortably within this limit.
 

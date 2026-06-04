@@ -1,3 +1,8 @@
+---
+name: Vercel Deploy
+description: Connect a Vite + React SPA to Vercel via Git integration, configure environment variables, and enable push-to-deploy from GitHub.
+---
+
 # Skill: Vercel Deploy
 
 Connect a Vite + React SPA to Vercel, configure environment variables, and enable push-to-deploy from GitHub.
@@ -16,14 +21,14 @@ Connect a Vite + React SPA to Vercel, configure environment variables, and enabl
 | `VITE_SUPABASE_URL` | Client-side — Supabase project URL |
 | `VITE_SUPABASE_PUBLISHABLE_KEY` | Client-side — Supabase anon/public key |
 | `VITE_SUPABASE_PROJECT_ID` | Client-side — Supabase project ref |
-| `SUPABASE_SERVICE_ROLE_KEY` | Edge functions only (not Vercel) |
 | `OPENROUTER_API_KEY` | Edge functions only (not Vercel) |
 | `OPENROUTER_MODEL` | Edge functions only (not Vercel) |
 
 > **Note:** `VITE_*` vars are bundled into the client-side JS by Vite at build time.
-> `SUPABASE_SERVICE_ROLE_KEY` and `OPENROUTER_*` are secrets used only by Supabase Edge
-> Functions — Vercel never executes those. Still set them in Vercel for completeness, or
-> skip if you prefer to keep them only in the Supabase dashboard.
+> `OPENROUTER_*` are secrets used only by Supabase Edge Functions — Vercel never executes
+> those. Still set them in Vercel for completeness, or skip if you prefer to keep them only
+> in the Supabase dashboard. This setup needs **no** service-role key; `SUPABASE_URL` and
+> `SUPABASE_ANON_KEY` are auto-injected into Edge Functions by Supabase.
 
 5. Click **Deploy**
 
