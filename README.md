@@ -11,21 +11,37 @@ Sign in with the throwaway test account to try it end to end:
 - **Email:** `test@email.com`
 - **Password:** `password`
 
+---
+
+# Part 1 — How I built it
+
+## Approach
+
+I started from a [Lovable](https://lovable.dev) starter, which gave me the Vite + React + shadcn/ui scaffold and the initial UI surfaces. From there I built the product-specific layers: the Supabase data model, authentication, the RAG ingestion/retrieval pipeline, and the OpenRouter chat function.
+
+I worked **skill-first**: each capability is captured as a reproduction *skill* under [`skills/`](skills/) as I built it. These doubled as my working notes and as runnable playbooks that let the whole setup be reproduced on a fresh project (see *Reproduction skills* below). The backend, security model, and AI integration were all authored and reviewed by me.
+
+## Time spent
+
+I spent roughly **5–6 hours**, in a single session. The two largest chunks were **not** feature breadth — they were the **data layer** and **security/spec alignment + cleanup**. Most of the effort went into getting RLS and RAG scoping right (every table scoped to `auth.uid()`, retrieval via a `SECURITY INVOKER` RPC so no service-role key is needed) and into trimming the starter down to only what the spec required. Building the actual screens was comparatively quick because the Lovable scaffold and shadcn primitives were already in place.
+
+---
+
+# Part 2 — Running it locally
+
 ## Stack
 
 - **Frontend**: Vite, React, TypeScript, shadcn/ui, Tailwind CSS
 - **Backend**: Supabase (Postgres + pgvector, Auth, Storage, Edge Functions)
 - **AI**: OpenRouter → forced tool-calling pattern; embeddings via Supabase `gte-small`
 
-## Local setup
-
-### Prerequisites
+## Prerequisites
 
 - Node.js
 - A [Supabase](https://supabase.com) project
 - An [OpenRouter](https://openrouter.ai) API key
 
-### Steps
+## Steps
 
 ```sh
 # 1. Clone the repo
@@ -67,6 +83,7 @@ src/
   lib/          # Shared utilities
 supabase/
   migrations/   # SQL migrations — source of truth for the schema
+  functions/    # Edge Functions (Deno): chat, ingest-rag-file
 skills/         # Reproduction skills (one SKILL.md per skill)
 ```
 
@@ -78,5 +95,6 @@ Runnable playbooks an AI agent (Codex or Claude) can follow to reproduce this se
 - [`skills/ground-rules/SKILL.md`](skills/ground-rules/SKILL.md) — project-wide conventions (TypeScript-only, secrets, LLM routing)
 - [`skills/supabase-setup/SKILL.md`](skills/supabase-setup/SKILL.md) — schema migrations, RLS, pgvector RAG, storage, env vars
 - [`skills/supabase-auth/SKILL.md`](skills/supabase-auth/SKILL.md) — email/password auth for a Vite SPA + route protection
+- [`skills/shadcn-ui/SKILL.md`](skills/shadcn-ui/SKILL.md) — design-system seed (components.json, theme tokens, component inventory) reproduced via the shadcn CLI/MCP
 - [`skills/openrouter/SKILL.md`](skills/openrouter/SKILL.md) — OpenRouter forced tool-calling, retry/backoff, model swapping
 - [`skills/vercel-deploy/SKILL.md`](skills/vercel-deploy/SKILL.md) — push-to-deploy on Vercel with env vars

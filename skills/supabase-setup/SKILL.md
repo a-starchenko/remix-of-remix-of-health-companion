@@ -1,11 +1,43 @@
 ---
 name: Supabase Setup
-description: Stand up the Supabase data layer — schema migrations, pgvector RAG tables, RLS policies, storage bucket, and env vars — and how to extend it.
+description: Stand up and navigate the Supabase backend — backend layout (where things live), schema migrations, pgvector RAG tables, RLS policies, storage bucket, env vars, and Edge Function contracts — and how to extend it.
 ---
 
 # Skill: Supabase Setup
 
 How this project's Supabase data layer is organised, and how to extend it.
+
+---
+
+## Backend layout (where things live)
+
+A shallow map so you know where to add new code. The backend is split between the `supabase/` tree (data layer + Edge Functions) and the typed client under `src/integrations/supabase/`.
+
+```
+supabase/
+├── config.toml                  # Supabase project config (function settings, etc.)
+├── migrations/                  # SQL migrations — the single source of truth for schema
+│   └── <timestamp>_<slug>.sql
+└── functions/                   # Edge Functions (Deno runtime, one folder each)
+    ├── deno.json                # marks these files as Deno (not Node) for the editor
+    ├── chat/index.ts            # health Q&A: RAG retrieval + OpenRouter forced tool-call
+    └── ingest-rag-file/index.ts # chunk + embed an uploaded doc into rag_chunks
+
+src/integrations/supabase/
+├── client.ts                    # the browser supabase client (anon key)
+└── types.ts                     # generated Database type — regenerate on schema change
+```
+
+**Where to add things:**
+
+| You want to… | Add it here |
+|---|---|
+| Change/extend the schema | New migration in `supabase/migrations/` → then update `types.ts` (see *Adding a new table*) |
+| Add a server-side endpoint | New folder `supabase/functions/<name>/index.ts` (Deno) |
+| Call OpenRouter / use a secret | Inside an Edge Function only — never in client code |
+| Refresh the typed client | Regenerate `src/integrations/supabase/types.ts` |
+
+> Stale build artifacts may appear under `supabase/.temp/` (e.g. `.output_*`). They are not source — the live functions are exactly the folders listed above.
 
 ---
 
@@ -271,6 +303,32 @@ await supabase.from("rag_files").delete().eq("id", file.id);
 ## Edge Functions (Deno)
 
 Edge Functions run in the Deno runtime on Supabase — not Node.js. The file `supabase/functions/deno.json` tells Cursor/VS Code to treat these files as Deno code, eliminating false `Deno`/`esm.sh` type errors in the editor. It does not affect runtime behaviour.
+
+### Shared conventions
+
+Every function follows the same shape, so a new one can be modelled on the existing two:
+
+- **CORS preflight:** handle `OPTIONS` first, return `corsHeaders` (`Access-Control-Allow-Origin: *`, allow `POST, OPTIONS`).
+- **Auth:** require the `Authorization` header; build the client with `createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { global: { headers: { Authorization: authHeader } } })`, then `auth.getUser()`. No service-role key — all DB work runs under the caller's JWT + RLS.
+- **Env:** `SUPABASE_URL` / `SUPABASE_ANON_KEY` are auto-injected by the runtime; `OPENROUTER_API_KEY` / `OPENROUTER_MODEL` come from function secrets.
+- **Embeddings:** `new Supabase.ai.Session("gte-small")` (384 dims, no API key).
+
+### Function contracts
+
+| Function | Body in | Returns | External calls |
+|---|---|---|---|
+| `chat` | `{ messages: {role, content}[], question?: string }` | `{ reply: string, usedContext: boolean }` | OpenRouter (chat), Supabase AI (embed), `match_rag_chunks` RPC |
+| `ingest-rag-file` | `{ file_id: string, text: string }` | `{ ok: true, chunks: number }` | Supabase AI (embed) — see *Knowledge Base: File Upload Flow* |
+
+#### `chat` — health Q&A with RAG
+
+1. Auth → parse body. `messages` is required (400 if empty); `question` defaults to the **last user message**.
+2. Embed the question (`gte-small`) → `match_rag_chunks(query_embedding, match_count: 6)` under the caller's JWT → inject the top matches into the system prompt as a `KNOWLEDGE BASE CONTEXT` block.
+3. The system prompt enforces a **strict health-only scope**: off-topic questions (coding, law, trivia, etc.) get exactly one refusal sentence; never a definitive diagnosis.
+4. Call OpenRouter with the forced `answer` tool (`tool_choice` pinned to it) — read the reply **only** from `tool_calls[0].function.arguments.reply`, never free text.
+5. `fetchWithRetry` retries on 429/5xx with exponential backoff (honours `Retry-After`, max 4 attempts).
+
+**Status codes:** 401 unauthorised · 400 missing `messages` · 402 AI credits exhausted · 502 malformed/empty AI response · 500 other.
 
 ---
 
