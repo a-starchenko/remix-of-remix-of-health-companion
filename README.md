@@ -1,73 +1,64 @@
-# Welcome to your Lovable project
+# Health Companion
 
-## Project info
+An AI-powered health assistant with a personal knowledge base. Users can upload documents (PDF, DOCX, TXT) and chat with an AI that retrieves relevant context from those documents using RAG (Retrieval-Augmented Generation).
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+Built with Vite + React + TypeScript, Supabase (auth, database, storage, embeddings), and OpenRouter for LLM access.
 
-## How can I edit this code?
+## Stack
 
-There are several ways of editing your application.
+- **Frontend**: Vite, React, TypeScript, shadcn/ui, Tailwind CSS
+- **Backend**: Supabase (Postgres + pgvector, Auth, Storage, Edge Functions)
+- **AI**: OpenRouter → forced tool-calling pattern; embeddings via Supabase `gte-small`
 
-**Use Lovable**
+## Local setup
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
+### Prerequisites
 
-Changes made via Lovable will be committed automatically to this repo.
+- Node.js
+- A [Supabase](https://supabase.com) project
+- An [OpenRouter](https://openrouter.ai) API key
 
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
+### Steps
 
 ```sh
-# Step 1: Clone the repository using the project's Git URL.
+# 1. Clone the repo
 git clone <YOUR_GIT_URL>
+cd remix-of-remix-of-health-companion
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+# 2. Install dependencies
+npm install
 
-# Step 3: Install the necessary dependencies.
-npm i
+# 3. Copy the env template and fill in your values
+cp .env.example .env.local
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
+# 4. Start the dev server
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+## Environment variables
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+Create a `.env.local` file (never commit it). All required variables:
 
-**Use GitHub Codespaces**
+| Variable | Description |
+|---|---|
+| `VITE_SUPABASE_URL` | Supabase project URL |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | Supabase anon/public key |
+| `VITE_SUPABASE_PROJECT_ID` | Supabase project ID |
+| `SUPABASE_SERVICE_ROLE_KEY` | Service-role key — **server-side only, never exposed to browser** |
+| `OPENROUTER_API_KEY` | OpenRouter API key — **server-side only, never exposed to browser** |
+| `OPENROUTER_MODEL` | Model slug (default: `google/gemma-4-31b-it:free`) |
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+> `VITE_` prefix makes a variable available client-side. Variables **without** `VITE_` are server-side only.
 
-## What technologies are used for this project?
+## Project structure
 
-This project is built with:
-
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
-
-## How can I deploy this project?
-
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
-
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+```
+src/
+  components/   # UI components
+  pages/        # Route pages
+  hooks/        # React hooks
+  integrations/ # Supabase client setup
+  lib/          # Shared utilities
+supabase/
+  migrations/   # SQL migrations — source of truth for the schema
+```
