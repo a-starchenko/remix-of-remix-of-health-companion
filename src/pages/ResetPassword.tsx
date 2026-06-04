@@ -22,8 +22,7 @@ const ResetPassword: React.FC = () => {
     if (type === 'recovery') {
       setIsRecovery(true);
     } else {
-      // If not a recovery link, redirect to auth
-      navigate('/auth');
+      navigate('/sign-in');
     }
   }, [navigate]);
 
@@ -46,8 +45,8 @@ const ResetPassword: React.FC = () => {
       if (error) throw error;
       toast({ title: 'Password updated successfully!' });
       navigate('/chat');
-    } catch (error: any) {
-      toast({ title: 'Error', description: error.message || 'Failed to update password', variant: 'destructive' });
+    } catch (error: unknown) {
+      toast({ title: 'Error', description: error instanceof Error ? error.message : 'Failed to update password', variant: 'destructive' });
     } finally {
       setIsLoading(false);
     }
@@ -111,7 +110,7 @@ const ResetPassword: React.FC = () => {
         <div className="text-center">
           <button
             type="button"
-            onClick={() => navigate('/auth')}
+            onClick={() => navigate('/sign-in')}
             className="text-sm text-primary hover:underline inline-flex items-center gap-1"
           >
             <ArrowLeft className="w-3 h-3" />

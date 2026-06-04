@@ -68,7 +68,7 @@ export const UserDropdown: React.FC<UserDropdownProps> = ({ onSwitchUser, varian
   const handleSignOut = async () => {
     sessionStorage.removeItem('impersonating');
     await signOut();
-    navigate('/auth');
+    navigate('/sign-in');
   };
 
 
@@ -97,7 +97,7 @@ export const UserDropdown: React.FC<UserDropdownProps> = ({ onSwitchUser, varian
 
   if (!user) {
     return (
-      <Button variant="ghost" size="sm" onClick={() => navigate('/auth')}>
+      <Button variant="ghost" size="sm" onClick={() => navigate('/sign-in')}>
         Sign In
       </Button>
     );
