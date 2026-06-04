@@ -60,7 +60,7 @@ async function fetchWithRetry(url: string, init: RequestInit): Promise<Response>
 }
 
 // ---------------------------------------------------------------------------
-// RAG context retrieval (placeholder — wired fully in Issue 07)
+// RAG context retrieval — embed question → pgvector cosine search → inject
 // ---------------------------------------------------------------------------
 const embedModel = new Supabase.ai.Session("gte-small");
 

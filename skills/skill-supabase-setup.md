@@ -120,11 +120,144 @@ The HNSW index on `rag_chunks.embedding` supports up to 2000 dimensions. `gte-sm
 
 ## Storage
 
-Bucket `rag-files` (private). Files are stored at `<user_id>/<filename>`.  
+Bucket `rag-files` (private). Files are stored at `<user_id>/<timestamp>-<sanitised_filename>`.  
 Storage policies allow each user to read, upload, and delete only their own folder:
 
 ```sql
 USING (bucket_id = 'rag-files' AND auth.uid()::text = (storage.foldername(name))[1])
+```
+
+**Create the bucket (migration):**
+```sql
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('rag-files', 'rag-files', false)
+ON CONFLICT (id) DO NOTHING;
+```
+
+**Per-user path convention:** `<user_id>/<Date.now()>-<sanitised_filename>`  
+Sanitise with `.replace(/[^\w.\-]/g, "_")` to keep paths URL-safe.
+
+**Storage policies (four policies on `storage.objects`):**
+```sql
+-- Read
+CREATE POLICY "Users read own rag files storage" ON storage.objects
+  FOR SELECT TO authenticated
+  USING (bucket_id = 'rag-files' AND auth.uid()::text = (storage.foldername(name))[1]);
+
+-- Upload
+CREATE POLICY "Users upload own rag files storage" ON storage.objects
+  FOR INSERT TO authenticated
+  WITH CHECK (bucket_id = 'rag-files' AND auth.uid()::text = (storage.foldername(name))[1]);
+
+-- Delete
+CREATE POLICY "Users delete own rag files storage" ON storage.objects
+  FOR DELETE TO authenticated
+  USING (bucket_id = 'rag-files' AND auth.uid()::text = (storage.foldername(name))[1]);
+```
+
+---
+
+## Knowledge Base: File Upload Flow
+
+The full upload pipeline has two phases: **client-side** (text extraction + storage upload + DB insert) then **server-side** (chunking + embedding).
+
+### 1 — Accepted file formats and size gate (client)
+
+```ts
+const ACCEPTED = ".txt,.md,.csv,.json,.pdf,.docx";
+const MAX_BYTES = 20 * 1024 * 1024; // 20 MB
+
+if (file.size > MAX_BYTES) throw new Error("Max 20MB per file.");
+```
+
+### 2 — Text extraction (client, `src/lib/extractText.ts`)
+
+| Format | Method |
+|--------|--------|
+| `.txt`, `.md`, `.csv`, `.json` | `File.text()` |
+| `.docx` | `mammoth.extractRawText({ arrayBuffer })` |
+| `.pdf` | `pdfjs-dist` — iterate pages, join `item.str` values |
+
+```ts
+import { extractText } from "@/lib/extractText";
+const text = await extractText(file); // throws on unsupported type
+```
+
+### 3 — Upload to Storage (client)
+
+```ts
+const path = `${user.id}/${Date.now()}-${file.name.replace(/[^\w.\-]/g, "_")}`;
+const { error } = await supabase.storage
+  .from("rag-files")
+  .upload(path, file, { contentType: file.type || "application/octet-stream", upsert: false });
+```
+
+### 4 — Insert document metadata (client)
+
+```ts
+const { data: row } = await supabase
+  .from("rag_files")
+  .insert({
+    user_id: user.id,
+    file_name: file.name,
+    mime_type: file.type || "application/octet-stream",
+    size_bytes: file.size,
+    storage_path: path,
+    status: "pending",
+  })
+  .select()
+  .single();
+```
+
+### 5 — Chunk + embed (Edge Function `ingest-rag-file`)
+
+Invoke from the client after the DB insert:
+
+```ts
+await supabase.functions.invoke("ingest-rag-file", {
+  body: { file_id: row.id, text },
+});
+```
+
+Inside the function:
+
+**Chunking strategy** — fixed-size sliding window with overlap:
+```ts
+function chunkText(text: string, size = 1200, overlap = 150): string[] {
+  const clean = text.replace(/\s+/g, " ").trim();
+  const chunks: string[] = [];
+  let i = 0;
+  while (i < clean.length) {
+    chunks.push(clean.slice(i, i + size));
+    if (i + size >= clean.length) break;
+    i += size - overlap;
+  }
+  return chunks;
+}
+```
+
+Max 200 chunks per file (`MAX_CHUNKS = 200`).
+
+**Embedding** — Supabase AI `gte-small` (384 dims, no API key):
+```ts
+const model = new Supabase.ai.Session("gte-small");
+const vec = await model.run(chunkText, { mean_pool: true, normalize: true });
+```
+
+Each chunk row:
+```ts
+{ user_id, file_id, chunk_index, content, embedding: Array.from(vec) }
+```
+
+On success the edge function sets `rag_files.status = "ready"` and `rag_files.chunk_count = n`.  
+On failure it sets `status = "error"` with `error_message`.
+
+### 6 — Delete
+
+```ts
+await supabase.storage.from("rag-files").remove([file.storage_path]);
+await supabase.from("rag_files").delete().eq("id", file.id);
+// rag_chunks rows cascade-delete via FK: rag_chunks.file_id → rag_files.id ON DELETE CASCADE
 ```
 
 ---
