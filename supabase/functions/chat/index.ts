@@ -1,5 +1,6 @@
 // @ts-nocheck — Deno runtime; not checked by Node.js TypeScript server
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { embedOne } from "../_shared/embed.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -62,12 +63,9 @@ async function fetchWithRetry(url: string, init: RequestInit): Promise<Response>
 // ---------------------------------------------------------------------------
 // RAG context retrieval — embed question → pgvector cosine search → inject
 // ---------------------------------------------------------------------------
-const embedModel = new Supabase.ai.Session("gte-small");
-
 async function embed(text: string): Promise<number[] | null> {
   try {
-    const result = await embedModel.run(text, { mean_pool: true, normalize: true });
-    return Array.from(result as number[]);
+    return await embedOne(text);
   } catch (e) {
     console.error("embed failed", e);
     return null;

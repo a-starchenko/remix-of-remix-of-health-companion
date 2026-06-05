@@ -180,27 +180,37 @@ npx supabase functions list
 
 The chat edge function injects relevant user-document excerpts into the system prompt before the OpenRouter call. The pipeline:
 
-### Why `gte-small` instead of a separate embeddings API
+### Embedding model: OpenRouter `google/gemini-embedding-001`
 
-`gte-small` (384-dim) runs inside Supabase Edge Runtime via `Supabase.ai.Session` — no external API key, no extra latency hop, no cost. It is the same model used at upload time, so query and document vectors live in the same embedding space.
+Embeddings go through OpenRouter's OpenAI-compatible `/embeddings` endpoint (same `OPENROUTER_API_KEY` as chat), not Supabase's built-in `gte-small`. Reasons:
+
+- **Multilingual** (gte-small was English-only).
+- **Off-CPU**: embedding is now a network call, so it no longer hits the Edge Function ~2s CPU limit that made large files time out.
+- **Batched**: one request embeds many chunks (`input` accepts an array).
+
+Config (`supabase/functions/_shared/embed.ts`, shared by `ingest-rag-file` and `chat` so query and document vectors share one space):
+
+- `OPENROUTER_EMBED_MODEL` (default `google/gemini-embedding-001`)
+- `OPENROUTER_EMBED_DIMENSIONS` (default `1536`)
+
+> **Why 1536, not 3072 (the model default):** pgvector's HNSW index caps at 2000 dimensions. The `dimensions` request param truncates the output; gemini-embedding-001 does **not** pre-normalize sub-3072 vectors, so the helper L2-normalizes them itself for correct cosine similarity. The value must match the `vector(N)` column type in the migration.
+
+> Changing the model or dimension is a breaking change: vectors live in a different space, so `rag_chunks` must be cleared, the `embedding` column re-typed, the HNSW index + `match_rag_chunks` recreated, and all files re-uploaded.
 
 ### Embedding the question
 
 ```typescript
-const embedModel = new Supabase.ai.Session("gte-small");
+import { embedOne } from "../_shared/embed.ts";
 
 async function embed(text: string): Promise<number[] | null> {
   try {
-    const result = await embedModel.run(text, { mean_pool: true, normalize: true });
-    return Array.from(result as number[]);
+    return await embedOne(text);
   } catch (e) {
     console.error("embed failed", e);
     return null;
   }
 }
 ```
-
-Both `mean_pool: true` and `normalize: true` are required so the vectors are comparable via cosine similarity.
 
 ### Cosine similarity search with pgvector
 

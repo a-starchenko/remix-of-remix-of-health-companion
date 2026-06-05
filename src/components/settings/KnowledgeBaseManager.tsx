@@ -141,28 +141,12 @@ export const KnowledgeBaseManager: React.FC = () => {
 
         await loadFiles();
 
-        // Phase 1: split into chunks server-side (stays under the function's
-        // CPU/time limits even for big files).
-        toast({ title: "Preparing…", description: file.name });
-        const { error: prepErr } = await supabase.functions.invoke("ingest-rag-file", {
-          body: { action: "prepare", file_id: row.id, text },
-        });
-        if (prepErr) throw await describeFunctionError(prepErr);
-        await loadFiles();
-
-        // Phase 2: embed in small batches, one request per batch, until done.
+        // Ingest: server chunks the text and embeds it via OpenRouter.
         toast({ title: "Indexing for search…", description: file.name });
-        let guard = 0;
-        for (;;) {
-          const { data: step, error: embErr } = await supabase.functions.invoke("ingest-rag-file", {
-            body: { action: "embed", file_id: row.id, batch_size: 16 },
-          });
-          if (embErr) throw await describeFunctionError(embErr);
-          if ((step?.remaining ?? 0) === 0) break;
-          if ((step?.embedded ?? 0) === 0) throw new Error("Indexing stalled — no chunks could be embedded.");
-          if (++guard > 1000) throw new Error("Indexing exceeded the maximum number of steps.");
-          await loadFiles();
-        }
+        const { error: fnErr } = await supabase.functions.invoke("ingest-rag-file", {
+          body: { file_id: row.id, text },
+        });
+        if (fnErr) throw await describeFunctionError(fnErr);
 
         toast({ title: "Added to knowledge base", description: file.name });
       } catch (err: any) {

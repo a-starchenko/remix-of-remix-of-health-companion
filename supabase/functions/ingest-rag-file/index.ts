@@ -1,6 +1,6 @@
 // @ts-nocheck — Deno runtime; not checked by Node.js TypeScript server
-/// <reference types="https://esm.sh/@supabase/functions-js/src/edge-runtime.d.ts" />
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { embedTexts } from "../_shared/embed.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -11,8 +11,6 @@ const corsHeaders = {
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 
-const embedModel = new Supabase.ai.Session("gte-small");
-
 // Server-side guardrails — mirror the client checks
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const ALLOWED_EXTENSIONS = new Set(["pdf", "docx", "txt", "md", "csv", "json"]);
@@ -20,7 +18,7 @@ const ALLOWED_EXTENSIONS = new Set(["pdf", "docx", "txt", "md", "csv", "json"]);
 const MAX_CHARS_PER_CHUNK = 1200;
 const OVERLAP_SENTENCES = 1;
 const MAX_CHUNKS = 200;
-const DEFAULT_EMBED_BATCH = 16;
+const EMBED_BATCH = 50;
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -42,13 +40,11 @@ function splitSentences(text: string): string[] {
   return (matches ?? [clean]).map((s) => s.trim()).filter(Boolean);
 }
 
-// Length of sentences joined with single spaces.
 function joinedLength(sentences: string[]): number {
   if (sentences.length === 0) return 0;
   return sentences.reduce((a, s) => a + s.length, 0) + (sentences.length - 1);
 }
 
-// A single sentence longer than the limit: hard-split it by words.
 function splitLongSentence(sentence: string): string[] {
   const words = sentence.split(/\s+/);
   const out: string[] = [];
@@ -113,10 +109,10 @@ Deno.serve(async (req) => {
     const user = userData?.user;
     if (!user) return json({ error: "Unauthorized" }, 401);
 
-    const body = await req.json();
-    const action: string = body.action ?? "prepare";
-    const file_id: string | undefined = body.file_id;
-    if (!file_id) return json({ error: "file_id required" }, 400);
+    const { file_id, text } = await req.json();
+    if (!file_id || typeof text !== "string") {
+      return json({ error: "file_id and text required" }, 400);
+    }
 
     // RLS-enforced: a user can only ever touch their own rows.
     const { data: file, error: fileErr } = await supabase
@@ -136,83 +132,43 @@ Deno.serve(async (req) => {
       return json({ error: "File too large (max 20MB)" }, 413);
     }
 
-    // Phase 1 — split the text into chunks and stage them with no embedding yet.
-    if (action === "prepare") {
-      const text = body.text;
-      if (typeof text !== "string") return json({ error: "text required" }, 400);
+    const chunks = chunkText(text);
+    if (chunks.length === 0) {
+      await supabase.from("rag_files").update({ status: "error", error_message: "No text extracted" }).eq("id", file_id);
+      return json({ error: "No text extracted from file" }, 400);
+    }
 
-      const chunks = chunkText(text);
-      if (chunks.length === 0) {
-        await supabase.from("rag_files").update({ status: "error", error_message: "No text extracted" }).eq("id", file_id);
-        return json({ error: "No text extracted from file" }, 400);
-      }
+    // Embed all chunks via OpenRouter, batched (network I/O, not CPU).
+    const embeddings: (number[] | null)[] = [];
+    for (let i = 0; i < chunks.length; i += EMBED_BATCH) {
+      const batch = await embedTexts(chunks.slice(i, i + EMBED_BATCH));
+      embeddings.push(...batch);
+    }
 
-      await supabase.from("rag_chunks").delete().eq("file_id", file_id);
-      const rows = chunks.map((content, idx) => ({
+    const rows = chunks
+      .map((content, idx) => ({
         user_id: user.id,
         file_id,
         chunk_index: idx,
         content,
-        embedding: null,
-      }));
-      const { error: insErr } = await supabase.from("rag_chunks").insert(rows);
-      if (insErr) {
-        await supabase.from("rag_files").update({ status: "error", error_message: insErr.message }).eq("id", file_id);
-        return json({ error: insErr.message }, 500);
-      }
+        embedding: embeddings[idx] as any,
+      }))
+      .filter((r) => r.embedding);
 
-      await supabase.from("rag_files").update({ status: "pending", chunk_count: rows.length, error_message: null }).eq("id", file_id);
-      return json({ ok: true, total: rows.length });
+    if (rows.length === 0) {
+      await supabase.from("rag_files").update({ status: "error", error_message: "Embedding failed" }).eq("id", file_id);
+      return json({ error: "Embedding failed" }, 500);
     }
 
-    // Phase 2 — embed a small batch of the still-unembedded chunks.
-    if (action === "embed") {
-      const batchSize = Math.min(Math.max(Number(body.batch_size) || DEFAULT_EMBED_BATCH, 1), 50);
-
-      const { data: pending, error: selErr } = await supabase
-        .from("rag_chunks")
-        .select("id, content")
-        .eq("file_id", file_id)
-        .is("embedding", null)
-        .order("chunk_index", { ascending: true })
-        .limit(batchSize);
-      if (selErr) return json({ error: selErr.message }, 500);
-
-      let embedded = 0;
-      for (const chunk of pending ?? []) {
-        try {
-          const result = await embedModel.run(chunk.content, { mean_pool: true, normalize: true });
-          const { error: upErr } = await supabase
-            .from("rag_chunks")
-            .update({ embedding: Array.from(result as number[]) as any })
-            .eq("id", chunk.id);
-          if (upErr) throw upErr;
-          embedded++;
-        } catch (e) {
-          // Drop the unembeddable chunk so it can never block completion.
-          console.error("embed failed for chunk", chunk.id, e);
-          await supabase.from("rag_chunks").delete().eq("id", chunk.id);
-        }
-      }
-
-      const { count: remaining } = await supabase
-        .from("rag_chunks")
-        .select("id", { count: "exact", head: true })
-        .eq("file_id", file_id)
-        .is("embedding", null);
-
-      if ((remaining ?? 0) === 0) {
-        const { count: total } = await supabase
-          .from("rag_chunks")
-          .select("id", { count: "exact", head: true })
-          .eq("file_id", file_id);
-        await supabase.from("rag_files").update({ status: "ready", chunk_count: total ?? 0, error_message: null }).eq("id", file_id);
-      }
-
-      return json({ ok: true, embedded, remaining: remaining ?? 0 });
+    await supabase.from("rag_chunks").delete().eq("file_id", file_id);
+    const { error: insErr } = await supabase.from("rag_chunks").insert(rows);
+    if (insErr) {
+      await supabase.from("rag_files").update({ status: "error", error_message: insErr.message }).eq("id", file_id);
+      return json({ error: insErr.message }, 500);
     }
 
-    return json({ error: `Unknown action: ${action}` }, 400);
+    await supabase.from("rag_files").update({ status: "ready", chunk_count: rows.length, error_message: null }).eq("id", file_id);
+    return json({ ok: true, chunks: rows.length });
   } catch (e) {
     console.error("ingest error", e);
     return json({ error: e instanceof Error ? e.message : "Unknown" }, 500);
