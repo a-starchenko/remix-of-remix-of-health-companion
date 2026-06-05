@@ -3,9 +3,30 @@
 
 import mammoth from "mammoth";
 
+// Single source of truth for what the Knowledge Base accepts. Mirrors the
+// server-side guardrails in supabase/functions/ingest-rag-file/index.ts.
+export const SUPPORTED_EXTENSIONS = ["txt", "md", "csv", "json", "pdf", "docx"] as const;
+
+export function getExtension(fileName: string): string {
+  const dot = fileName.lastIndexOf(".");
+  return dot === -1 ? "" : fileName.slice(dot + 1).toLowerCase();
+}
+
+export function isSupportedFile(file: File): boolean {
+  return (SUPPORTED_EXTENSIONS as readonly string[]).includes(getExtension(file.name));
+}
+
 export async function extractText(file: File): Promise<string> {
   const name = file.name.toLowerCase();
   const type = file.type;
+
+  // Reject anything outside the allow-list
+  if (!isSupportedFile(file)) {
+    const ext = getExtension(file.name);
+    throw new Error(
+      `Unsupported file type${ext ? `: .${ext}` : ""}. Allowed: ${SUPPORTED_EXTENSIONS.map((e) => "." + e).join(", ")}.`,
+    );
+  }
 
   if (
     type.startsWith("text/") ||

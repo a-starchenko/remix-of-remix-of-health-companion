@@ -3,7 +3,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { extractText } from "@/lib/extractText";
+import { extractText, isSupportedFile, SUPPORTED_EXTENSIONS } from "@/lib/extractText";
+import { FunctionsHttpError } from "@supabase/supabase-js";
 import { Upload, Trash2, FileText, Loader2, CheckCircle2, AlertCircle, Database } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -21,6 +22,25 @@ interface RagFile {
 
 const ACCEPTED =
   ".txt,.md,.csv,.json,.pdf,.docx,application/pdf,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+// invoke() hides the response body on non-2xx; pull out the real { error } message.
+async function describeFunctionError(err: unknown): Promise<Error> {
+  if (err instanceof FunctionsHttpError) {
+    try {
+      const body = await err.context.json();
+      if (body?.error) return new Error(String(body.error));
+    } catch {
+      // body wasn't JSON (e.g. a gateway timeout) — fall through to the raw text
+      try {
+        const text = await err.context.text();
+        if (text) return new Error(text);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  return err instanceof Error ? err : new Error(String(err));
+}
 
 function formatSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
@@ -70,13 +90,26 @@ export const KnowledgeBaseManager: React.FC = () => {
 
     setUploading(true);
     for (const file of filesToUpload) {
+      // So we can flag the row as errored on failure instead of leaving it "pending".
+      let rowId: string | null = null;
       try {
+        // Reject unsupported types before touching storage or the DB.
+        if (!isSupportedFile(file)) {
+          const allowed = SUPPORTED_EXTENSIONS.map((e) => "." + e).join(", ");
+          toast({
+            title: `${file.name} not supported`,
+            description: `Allowed types: ${allowed}.`,
+            variant: "destructive",
+          });
+          continue;
+        }
+
         if (file.size > 20 * 1024 * 1024) {
           toast({ title: `${file.name} too large`, description: "Max 20MB per file.", variant: "destructive" });
           continue;
         }
 
-        // Extract text first (fail fast for unsupported types)
+        // Extract text first (fail fast for unreadable/empty files)
         toast({ title: "Reading file…", description: file.name });
         const text = await extractText(file);
         if (!text.trim()) {
@@ -104,22 +137,46 @@ export const KnowledgeBaseManager: React.FC = () => {
           .select()
           .single();
         if (insErr) throw insErr;
+        rowId = row.id;
 
         await loadFiles();
 
-        // Ingest (embed) in background
-        toast({ title: "Indexing for search…", description: file.name });
-        const { error: fnErr } = await supabase.functions.invoke("ingest-rag-file", {
-          body: { file_id: row.id, text },
+        // Phase 1: split into chunks server-side (stays under the function's
+        // CPU/time limits even for big files).
+        toast({ title: "Preparing…", description: file.name });
+        const { error: prepErr } = await supabase.functions.invoke("ingest-rag-file", {
+          body: { action: "prepare", file_id: row.id, text },
         });
-        if (fnErr) throw fnErr;
+        if (prepErr) throw await describeFunctionError(prepErr);
+        await loadFiles();
+
+        // Phase 2: embed in small batches, one request per batch, until done.
+        toast({ title: "Indexing for search…", description: file.name });
+        let guard = 0;
+        for (;;) {
+          const { data: step, error: embErr } = await supabase.functions.invoke("ingest-rag-file", {
+            body: { action: "embed", file_id: row.id, batch_size: 16 },
+          });
+          if (embErr) throw await describeFunctionError(embErr);
+          if ((step?.remaining ?? 0) === 0) break;
+          if ((step?.embedded ?? 0) === 0) throw new Error("Indexing stalled — no chunks could be embedded.");
+          if (++guard > 1000) throw new Error("Indexing exceeded the maximum number of steps.");
+          await loadFiles();
+        }
 
         toast({ title: "Added to knowledge base", description: file.name });
       } catch (err: any) {
         console.error(err);
+        const message = err?.message || "Unknown error";
+        if (rowId) {
+          await supabase
+            .from("rag_files")
+            .update({ status: "error", error_message: message })
+            .eq("id", rowId);
+        }
         toast({
           title: `Failed: ${file.name}`,
-          description: err?.message || "Unknown error",
+          description: message,
           variant: "destructive",
         });
       }
